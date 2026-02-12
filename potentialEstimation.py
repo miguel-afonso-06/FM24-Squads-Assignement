@@ -1,6 +1,7 @@
 import pandas as pd
+from utils import debug_nan
 
-DEBUG = True
+DEBUG = False
 
 PERSONALITY_MAP = {
     'Model Citizen': 1.15, 'Professional': 1.15, 'Model Professional': 1.15, 'Perfectionist': 1.15,
@@ -32,41 +33,58 @@ def age_multiplier(age):
 
 def calculate_tactical_potential(df, role_scores_df, tactic):
     results = []
-    tactical_roles = [role for pos, role in tactic]
     
     for idx, row in df.iterrows():
         scores_row = role_scores_df[role_scores_df.index == idx]
         if scores_row.empty:
-            continue
+            scores_row = pd.DataFrame(columns=role_scores_df.columns, index=[idx])
 
-        eligible = scores_row[tactical_roles].iloc[0]
-        role_score = eligible.max()
+        player_positions = row.get('Position_List', [])
+        eligible_roles = []
+
+        for pos_side, role_name in tactic:
+            for player_pos_side in player_positions:
+                # Flatten single-element lists and allow DM/no-side matching
+                if isinstance(player_pos_side, list):
+                    player_pos_side_flat = [p for p in player_pos_side if p]
+                else:
+                    player_pos_side_flat = [player_pos_side]
+
+                # Match if any position in tactic matches player
+                if all(p in player_pos_side_flat for p in pos_side):
+                    eligible_roles.append(role_name)
+
+        if eligible_roles:
+            eligible = scores_row[eligible_roles].iloc[0]
+            role_score = eligible.max()
+        else:
+            role_score = None
+
         age = pd.to_numeric(row.get('Age', 25), errors='coerce')
         age = 25 if pd.isna(age) else age
-        
+
         personality = str(row.get('Personality', 'Balanced')).strip()
         p_factor = PERSONALITY_MAP.get(personality, 1.0)
-        
-        raw_pe = role_score * age_multiplier(age) * dna_factor(row) * p_factor
-        pe = max(role_score, raw_pe)
+
+        raw_pe = role_score * age_multiplier(age) * dna_factor(row) * p_factor if role_score is not None else None
+        pe = max(role_score, raw_pe) if role_score is not None else None
 
         results.append({
             'UID': idx,
             'Name': row['Name'],
-            'Current Quality': round(role_score, 2),
-            'Potential Estimate': round(pe, 2),
-            'Tactical Role': eligible.idxmax(),
+            'Current Quality': round(role_score, 2) if role_score is not None else None,
+            'Potential Estimate': round(pe, 2) if pe is not None else None,
+            'Tactical Role': eligible_roles[0] if eligible_roles else None,
             'Personality_Factor': p_factor
         })
 
-        final_df = pd.DataFrame(results).set_index('UID', drop=False)
+    final_df = pd.DataFrame(results).set_index('UID', drop=False)
 
-        # merge role score columns back in
-        role_scores_only = role_scores_df.copy()
-        role_scores_only.index = role_scores_only.index.astype(str)
+    # Merge role scores back in
+    role_scores_only = role_scores_df.copy()
+    role_scores_only.index = role_scores_only.index.astype(final_df.index.dtype)
+    final_df = pd.concat([final_df, role_scores_only], axis=1)
+    final_df = final_df.loc[:, ~final_df.columns.duplicated()]
 
-        # final_df = final_df.join(role_scores_only, how='left')
-        if DEBUG: print(f"[DEBUG] final_df row 0:\n{final_df.head(1)}\n[DEBUG] role_scores_only row 0:\n{role_scores_only.head(1)}")
-        final_df = pd.concat([final_df, role_scores_only], axis=1)
-
-        return final_df
+    # debug_nan(final_df, "calculate_tactical_potential")
+    return final_df

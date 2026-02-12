@@ -1,7 +1,7 @@
 import re
 import pandas as pd
 
-DEBUG = True
+DEBUG = False
 
 FOOT_MAPPING = {
     "Very Strong": 10,
@@ -86,3 +86,25 @@ def parse_transfer_value(val_str):
         return float(val_str) * multiplier
     except:
         return 0.0
+
+def debug_nan(df, func_name=""):
+    if not isinstance(df, pd.DataFrame):
+        return
+
+    # Find all columns with NaN
+    nan_info = {}
+    total_rows = len(df)
+    for col in df.columns:
+        nan_count = df[col].isna().sum()
+        if nan_count > 0:
+            nan_info[col] = nan_count
+
+    if nan_info:
+        print(f"[NaN DEBUG] Function: {func_name}")
+        for col, nan_count in nan_info.items():
+            print(f"  Column: '{col}'")
+            print(f"    NaN count: {nan_count}/{total_rows} rows")
+            if nan_count == total_rows:
+                print(f"    -> Entire column is NaN!")
+            print(f"    Sample rows with NaN:\n{df[df[col].isna()].head(5)}")
+        print("-"*60)

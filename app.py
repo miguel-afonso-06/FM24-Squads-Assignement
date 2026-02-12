@@ -10,7 +10,7 @@ from squad_selection import organize_squads
 from potentialEstimation import PERSONALITY_MAP
 import traceback
 
-DEBUG = True 
+DEBUG = False 
 
 class SquadSelectorApp:
     def __init__(self, root):
@@ -119,6 +119,7 @@ class SquadSelectorApp:
                 raw_data['Personality'] = raw_data['Personality'].fillna('Balanced')
 
             self.data = raw_data
+            # debug_nan(self.data, "load_data")
 
         except Exception as e:
             traceback.print_exc()
@@ -129,7 +130,6 @@ class SquadSelectorApp:
         try:
             current_tactic = [[[part.strip() for part in pos.split(',')], role] 
                               for pos, role in self.default_tactic]
-            
             potential_report = calculate_tactical_potential(
                 self.data, 
                 self.squad_role_score, 
@@ -138,13 +138,15 @@ class SquadSelectorApp:
             
             report_df = pd.concat([
                 potential_report,
-                self.data[['Position_List', 'Personality', 'Transfer Value']]
+                self.data[['Position_List', 'Personality', 'Transfer Value', 'DoB']]
             ], axis=1)
+            # debug_nan(report_df, "run_analysis")
             
             report_df['Value_Num'] = report_df['Transfer Value'].apply(parse_transfer_value)
             
-            self.output_df = organize_squads(report_df, current_tactic)
+            self.output_df = organize_squads(report_df, current_tactic, self.role_position_map)
             self.setup_results_screen(current_tactic)
+            # debug_nan(report_df, "run_analysis")
 
         except Exception as e:
             traceback.print_exc()
@@ -608,13 +610,21 @@ class ResultsTableScreen:
     def populate_table(self):
         # if DEBUG: print(f"[DEBUG]\nFiltered_df:\n{self.filtered_df}")
         """Populate Treeview with data."""
+        treeview_data = pd.DataFrame()
+        # if DEBUG: print(f"[DEBUG] filtered_df columns:\n{self.filtered_df.columns}")
+        # filtered_df is OK
         for idx, row in self.filtered_df.iterrows():
             values = []
             for col in self.column_names:
                 val = row.get(col, "")
+                # if DEBUG: print(f"[DEBUG] val:\n{val}\n")
                 if isinstance(val, float):
                     val = f"{val:.2f}"
                 values.append(str(val))
+            values_df = pd.DataFrame(values)
+            values_df = values_df.T
+            treeview_data = pd.concat([treeview_data, values_df])
+            #print(values_df)
             self.tree.insert("", "end", values=values)
 
     def sort_by_column(self, col):
