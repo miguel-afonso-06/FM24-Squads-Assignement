@@ -20,6 +20,7 @@ class SquadSelectorApp:
         
         self.data = None
         self.weights = None
+        self.role_position_map = None
         self.squad_role_score = None
         self.output_df = None
         
@@ -63,16 +64,13 @@ class SquadSelectorApp:
         self.tactic_display.pack(pady=10)
 
     def open_tactic_editor(self):
-        """Open the interactive tactical board editor."""
         editor_win = tk.Toplevel(self.root)
-        editor = TacticalBoardEditor(editor_win, self.weights, self.default_tactic)
+        editor = TacticalBoardEditor(editor_win, self.role_position_map, self.default_tactic)
         self.root.wait_window(editor_win)
         
         if editor.confirmed_tactic:
             self.default_tactic = editor.confirmed_tactic
-            if DEBUG: print(f"[DEBUG 9] Tactic updated: {len(self.default_tactic)} positions configured")
             
-            # Update display
             tactic_str = ", ".join([f"{pos}→{role.split('(')[0].strip()}" for pos, role in self.default_tactic[:5]])
             tactic_str += f" ... ({len(self.default_tactic)} total)"
             self.tactic_display.config(text=f"Current Tactic: {tactic_str}", fg="green")
@@ -82,85 +80,76 @@ class SquadSelectorApp:
         file_path = filedialog.askopenfilename(filetypes=[("HTML files", "*.html")])
         if not file_path: return
         try:
-            # Inside app.py (where you load the weights)
             with open('attributes_weights.json', 'r') as f:
                 weights_data = json.load(f)
 
-            # Convert list of dicts to DataFrame
             weights_df = pd.DataFrame(weights_data)
 
-            # Set 'Roles' as the index and transpose so Attributes are rows, Roles are columns
+            # Build role-position map (FIXED)
+            self.role_position_map = {}
+            for entry in weights_data:
+                role = entry.get("Roles")
+                positions = entry.get("Positions", [])
+                if role:
+                    self.role_position_map[role] = positions
+
             if 'Roles' in weights_df.columns:
                 weights_df.set_index('Roles', inplace=True)
                 self.weights = weights_df.transpose()
             else:
                 self.weights = weights_df
-            
-            if DEBUG: print(f"[DEBUG 1] Weights loaded. Found {len(self.weights)} roles.")
 
             self.tactic_btn.config(state="normal")
             
-            raw_data = pd.read_html(file_path, header=0, encoding='utf-8',index_col=0)[0]
-            """ with pd.option_context('display.max_columns', None):
-                if DEBUG: print(f"[DEBUG] raw_data:\n{raw_data}") """
+            raw_data = pd.read_html(file_path, header=0, encoding='utf-8', index_col=0)[0]
+            
             if "UID" in raw_data.columns:
                 raw_data['UID'] = raw_data['UID'].astype(str)
+
             raw_data.columns = raw_data.columns.str.strip()
             raw_data = raw_data.map(lambda x: x.strip() if isinstance(x, str) else x)
-            print(f'[DEBUG 2] Raw data columns:\n{raw_data.columns}')
-            #raw_data['UID'] = raw_data.index
-            
-            if DEBUG: print(f"[DEBUG 2] HTML loaded. Shape: {raw_data.shape}.")
 
             raw_data['Position_List'] = raw_data['Position'].apply(parse_positions)
-            assert 'Position_List' in raw_data.columns
+
             self.squad_role_score = calculate_all_role_scores(raw_data, self.weights)
-            # Ensure Personality column exists
+
             if 'Personality' not in raw_data.columns:
                 raw_data['Personality'] = 'Balanced'
             else:
                 raw_data['Personality'] = raw_data['Personality'].fillna('Balanced')
 
             self.data = raw_data
-            #messagebox.showinfo("Success", "File and Role mappings loaded. Now configure your tactic.")
+
         except Exception as e:
             traceback.print_exc()
-
             messagebox.showerror("Error", f"Failed to load: {e}")
-            if DEBUG: print(f"[DEBUG ERROR] {e}")
 
     def run_analysis(self):
         if self.data is None: return
         try:
-            # self.data.set_index('UID', inplace=True, drop=False)
-            # Convert tactic to the format expected by squad_selection.py: [['D', 'C'], 'Role Name']
-            current_tactic = [[[part.strip() for part in pos.split(',')], role] for pos, role in self.default_tactic]
+            current_tactic = [[[part.strip() for part in pos.split(',')], role] 
+                              for pos, role in self.default_tactic]
             
-            # 1. Calculate tactical potential 
-            potential_report = calculate_tactical_potential(self.data, self.squad_role_score, current_tactic)
+            potential_report = calculate_tactical_potential(
+                self.data, 
+                self.squad_role_score, 
+                current_tactic
+            )
             
-            # 2. Merge basic info
-            
-            """ if DEBUG: print(f"[DEBUG] self.data & potential_report columns:\nself.data:\n{self.data.columns}\n\npotential_report:\n{potential_report.columns}")
-            with pd.option_context("display.max_columns", None):
-                if DEBUG: print(f"[DEBUG] potential_report:\n{potential_report}\n[DEBUG] sel.data:\n{self.data}") """
             report_df = pd.concat([
                 potential_report,
                 self.data[['Position_List', 'Personality', 'Transfer Value']]
             ], axis=1)
             
-            # 3. Add numerical value for sorting in squad_selection
             report_df['Value_Num'] = report_df['Transfer Value'].apply(parse_transfer_value)
             
-            # 4. RUN SELECTION (This adds 'Decision', 'Squad', and 'Assigned Role')
-            # We pass the formatted current_tactic here
-            if DEBUG: print(f"[DEBUG report_df] report_df columns are:\n{report_df.columns}")
             self.output_df = organize_squads(report_df, current_tactic)
-            
             self.setup_results_screen(current_tactic)
+
         except Exception as e:
             traceback.print_exc()
             messagebox.showerror("Error", f"Analysis failed: {str(e)}")
+
 
     def setup_results_screen(self, current_tactic):
         for widget in self.main_container.winfo_children(): widget.destroy()
@@ -370,13 +359,12 @@ class TacticalBoardEditor:
         
         # Get compatible roles for this position
         compatible_roles = []
-        for w in self.weights:
-            if 'Positions' in w:
-                for pos_list in w['Positions']:
-                    # Check if the list joined matches our lookup (e.g., ["DM"] or ["D", "L"])
-                    if ", ".join(pos_list) == lookup_position:
-                        compatible_roles.append(w['Roles'])
-                        break
+
+        for role, positions in self.role_position_map.items():
+            for pos_list in positions:
+                if ", ".join(pos_list) == lookup_position:
+                    compatible_roles.append(role)
+                    break
         
         # ... (rest of the method remains the same)
         
