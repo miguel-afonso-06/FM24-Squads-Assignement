@@ -577,6 +577,7 @@ class ResultsTableScreen:
         self.filter_widgets = {}
         self.filter_containers = {}
         self.build_filter_and_tree()
+        self.reverse_sort = False
 
     def build_filter_and_tree(self):
         if DEBUG: print(f"[DEBUG] build_filter_and_tree called: True\n")
@@ -627,42 +628,6 @@ class ResultsTableScreen:
             self.tree.heading(col, text=col, command=lambda c=col: self.sort_by_column(c))
             self.tree.column(col, width=self.col_widths[col], anchor="w")
 
-        """ # Filter row using ttk.Frame with proper column widths
-        filter_frame = ttk.Frame(main_frame)
-        filter_frame.pack(fill="x", padx=0, pady=0, side="top")
-
-        filter_frame.config(height=40)
-        filter_frame.pack_propagate(False)
-        
-        self.filter_widgets = {}
-        self.filter_entries = {}
-        for i, col in enumerate(self.column_names):
-            width = self.col_widths.get(col, 100)
-            filt_box = ttk.Frame(filter_frame, width=width)
-            filt_box.pack(side="left", fill="both", padx=1)
-            filt_box.pack_propagate(False)
-            
-            label = tk.Label(filt_box, text=f"🔍 {col}", font=("Arial", 8, "bold"), bg="#e0e0e0", fg="navy", height=1)
-            label.pack(fill="x")
-            
-            entry = ttk.Entry(filt_box, width=int(width))
-            entry.pack(fill="both", expand=True, padx=2, pady=2)
-            entry.bind("<KeyRelease>", lambda e, c=col: self.apply_filters())
-            
-            self.filter_widgets[col] = filt_box
-            self.filter_entries[col] = entry        
-
-        # Treeview with scrollbars
-        tree_frame = ttk.Frame(main_frame)
-        tree_frame.pack(fill="both", expand=True, padx=0, pady=5)
-        
-        self.tree = ttk.Treeview(tree_frame, columns=self.column_names, show='headings', height=25)
-        
-        for col in self.column_names:
-            width = self.col_widths.get(col, 100)
-            self.tree.column(col, width=width, anchor="w")
-            self.tree.heading(col, text=col, command=lambda c=col: self.sort_by_column(c)) """
-
         # Scrollbars        
         vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
         hsb = ttk.Scrollbar(main_frame, orient="horizontal", command=self.sync_hscroll)
@@ -708,7 +673,7 @@ class ResultsTableScreen:
                     val = f"{val:.2f}"
                 values.append(str(val))
 
-        """ treeview_data = pd.DataFrame()
+        treeview_data = pd.DataFrame()
         # if DEBUG: print(f"[DEBUG] filtered_df columns:\n{self.filtered_df.columns}")
         # filtered_df is OK
         for idx, row in self.filtered_df.iterrows():
@@ -723,7 +688,7 @@ class ResultsTableScreen:
             values_df = values_df.T
             treeview_data = pd.concat([treeview_data, values_df])
             #print(values_df)
-            self.tree.insert("", "end", values=values) """
+            self.tree.insert("", "end", values=values)
 
     def apply_filters(self):
         # Apply all active filters to the dataframe
@@ -739,8 +704,13 @@ class ResultsTableScreen:
 
     def sort_by_column(self, col):
         """Sort table by column."""
-        self.filtered_df = self.filtered_df.sort_values(by=col, ascending=True)
-        self.populate_table()
+        if self.tree.get_children() == (): return
+        new_order = sorted(self.tree.get_children(),
+                            key=lambda x: self.tree.set(x, column=col),
+                            reverse=self.reverse_sort)
+        for index, item in enumerate(new_order):
+            self.tree.move(item, '', index)
+        self.reverse_sort = not self.reverse_sort
 
 
 class SquadVisualizer:

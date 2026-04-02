@@ -1,2 +1,0 @@
-I want to create a df with the index and name cols of the data df and the other column here's what I want:
-I want to assigned each player to his best role in the tactic in the dict give_tactic. For that first check if the position in the key is in the list in the "Position" col of the data df. Out of those positions get the roles he could play in this tactic.
