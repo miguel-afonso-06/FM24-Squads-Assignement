@@ -24,7 +24,7 @@ class SquadSelectorApp:
         self.squad_role_score = None
         self.output_df = None
         
-        self.default_tactic = [
+        self.default_ui_tactic = [
             ("GK", "Sweeper Keeper (At)"),
             ("D, R", "Complete Wing-Back (Su)"),
             ("D, CR", "Central Defender (De)"),
@@ -37,6 +37,8 @@ class SquadSelectorApp:
             ("AM, L", "Inside Forward (Su)"),            
             ("ST, C", "Advanced Forward (At)")
         ]
+
+        self.engine_tactic = []
         
         self.setup_main_layout()
 
@@ -64,16 +66,13 @@ class SquadSelectorApp:
         self.tactic_display.pack(pady=10)
 
     def open_tactic_editor(self):
-        editor_win = tk.Toplevel(self.root)
-        editor = TacticalBoardEditor(editor_win, self.role_position_map, self.default_tactic)
-        self.root.wait_window(editor_win)
+        """Opens the board editor and updates ui_tactic upon confirmation."""
+        editor = TacticalBoardEditor(self.root,role_position_map=self.role_position_map , default_ui_tactic=self.default_ui_tactic)
+        self.root.wait_window(editor.window)
         
-        if editor.confirmed_tactic:
-            self.default_tactic = editor.confirmed_tactic
-            
-            tactic_str = ", ".join([f"{pos}→{role.split('(')[0].strip()}" for pos, role in self.default_tactic[:5]])
-            tactic_str += f" ... ({len(self.default_tactic)} total)"
-            self.tactic_display.config(text=f"Current Tactic: {tactic_str}", fg="green")
+        if hasattr(editor, 'default_ui_tactic'):
+            self.default_ui_tactic = editor.default_ui_tactic
+            self.tactic_display.config(text="Current Tactic: Custom (Ready to Analyze)", fg="green")
             self.run_btn.config(state="normal")
 
     def load_data(self):
@@ -84,12 +83,15 @@ class SquadSelectorApp:
                 weights_data = json.load(f)
 
             weights_df = pd.DataFrame(weights_data)
+            print(f"[DEBUG] weights_df:\n{weights_df}\n")
 
             # Build role-position map (FIXED)
             self.role_position_map = {}
             for entry in weights_data:
-                role = entry.get("Roles")
-                positions = entry.get("Positions", [])
+                # if DEBUG: print(f"[DEBUG] entry:\n{entry}\n\n[DEBUG] type(entry):\n{type(entry)}\n")
+                role = entry["Roles"]
+                positions = entry["Positions"]
+                # if DEBUG: print(f"[DEBUG] type(positions):\n{type(positions)}\n")
                 if role:
                     self.role_position_map[role] = positions
 
@@ -110,6 +112,7 @@ class SquadSelectorApp:
             raw_data = raw_data.map(lambda x: x.strip() if isinstance(x, str) else x)
 
             raw_data['Position_List'] = raw_data['Position'].apply(parse_positions)
+            if DEBUG: print(f"[DEBUG] raw_data['Position_List']:\n{raw_data['Position_List']}\n")
 
             self.squad_role_score = calculate_all_role_scores(raw_data, self.weights)
 
@@ -128,12 +131,25 @@ class SquadSelectorApp:
     def run_analysis(self):
         if self.data is None: return
         try:
-            current_tactic = [[[part.strip() for part in pos.split(',')], role] 
-                              for pos, role in self.default_tactic]
+            def prepare_for_engine(pos_str):
+                parts = [p.strip() for p in pos_str.split(', ')]
+                area = parts[0]
+
+                if area in ['DM', 'GK']:
+                    return [area]
+                if len(parts) > 1:
+                    side = parts[1][0].upper()
+                    return [area, side]
+                return [area]
+
+            """ current_tactic = [[[part.strip() for part in pos.split(',')], role] 
+                              for pos, role in self.default_tactic] """
+            self.engine_tactic = [[prepare_for_engine(pos), role]
+                                  for pos, role in self.default_ui_tactic]
             potential_report = calculate_tactical_potential(
                 self.data, 
                 self.squad_role_score, 
-                current_tactic
+                self.engine_tactic
             )
             
             report_df = pd.concat([
@@ -144,8 +160,8 @@ class SquadSelectorApp:
             
             report_df['Value_Num'] = report_df['Transfer Value'].apply(parse_transfer_value)
             
-            self.output_df = organize_squads(report_df, current_tactic, self.role_position_map)
-            self.setup_results_screen(current_tactic)
+            self.output_df = organize_squads(report_df, self.engine_tactic, self.role_position_map)
+            self.setup_results_screen(self.default_ui_tactic)
             # debug_nan(report_df, "run_analysis")
 
         except Exception as e:
@@ -165,6 +181,7 @@ class SquadSelectorApp:
         content_frame = ttk.Frame(self.main_container)
         content_frame.pack(fill='both', expand=True)
         ResultsTableScreen(content_frame, self.output_df)
+        if DEBUG: print(f"[DEBUG] ResultsTableScreen called: True\n")
 
     def export_results(self):
         if self.output_df is None: return
@@ -181,23 +198,22 @@ class SquadSelectorApp:
 class TacticalBoardEditor:
     """Interactive FM24-style tactical board editor."""
     
-    def __init__(self, window, weights, default_tactic):
-        self.window = window
-        self.weights = weights
-        self.confirmed_tactic = None
+    def __init__(self, parent, role_position_map, default_ui_tactic):
+        self.window = tk.Toplevel(parent)
         self.window.title("Tactical Board Editor")
         self.window.geometry("1100x900")
+
+        self.window.transient(parent)
+        self.window.grab_set()
+
+        self.role_position_map = role_position_map
+        self.engine_tactic = None
+
         
         # Fixed position for each grid cell (row, col) -> position_str
         self.grid_positions = self.create_grid_positions()
-        
-        # Current formation configuration: (row, col) -> role
         self.formation = {}
-        
-        # Initialize from default tactic
-        self.init_from_tactic(default_tactic)
-        
-        # Draw UI
+        self.init_from_tactic(default_ui_tactic)
         self.build_ui()
     
     def create_grid_positions(self):
@@ -314,6 +330,7 @@ class TacticalBoardEditor:
         
         # Get the fixed position for this cell
         position = self.grid_positions.get((row, col))
+        print(f"[DEBUG] TacticalBoardEditor.on_canvas_click position:\n{position}\n")
         if not position:
             return
         
@@ -362,6 +379,7 @@ class TacticalBoardEditor:
         # Get compatible roles for this position
         compatible_roles = []
 
+        # print(f"[DEBUG] SquadSelectorApp.role_position_map:\n{self.role_position_map}\n")
         for role, positions in self.role_position_map.items():
             for pos_list in positions:
                 if ", ".join(pos_list) == lookup_position:
@@ -428,7 +446,11 @@ class TacticalBoardEditor:
             messagebox.showwarning("Empty Tactic", "Please add at least one position to the formation.")
             return
         
-        # Convert formation dict to list of (pos, role) tuples, sorted by row then col
+        self.default_ui_tactic = [
+            (self.grid_positions[pos], role)
+            for pos, role in sorted(self.formation.items())
+        ]
+        """ # Convert formation dict to list of (pos, role) tuples, sorted by row then col
         sorted_items = sorted(self.formation.items())
         
         # Normalize positions: convert to first letter of side only (L, C, R, CL, CR -> C only)
@@ -449,10 +471,10 @@ class TacticalBoardEditor:
 
             normalized_tactic.append((normalized_pos, role))
         
-        self.confirmed_tactic = normalized_tactic
+        self.confirmed_tactic = normalized_tactic """
         
         if DEBUG:
-            print(f"[DEBUG 10] Confirmed tactic: {self.confirmed_tactic}")
+            print(f"[DEBUG 10] default_ui_tactic: {self.default_ui_tactic}")
         
         self.window.destroy()
     
@@ -552,14 +574,60 @@ class ResultsTableScreen:
             "UID": 60, "Name": 150, "Squad": 100, "Decision": 140, 
             "Assigned Role": 160, "Current Quality": 100, "Potential Estimate": 100, "Transfer Value": 100
         }
+        self.filter_widgets = {}
+        self.filter_containers = {}
         self.build_filter_and_tree()
 
     def build_filter_and_tree(self):
+        if DEBUG: print(f"[DEBUG] build_filter_and_tree called: True\n")
         """Create filter row and treeview with proper synchronized scrolling."""
         main_frame = ttk.Frame(self.parent)
         main_frame.pack(fill="both", expand=True)
+
+        # 1. Filter Area
+        self.filter_canvas = tk.Canvas(main_frame, height=45, highlightthickness=0, bg="#e0e0e0")
+        self.filter_canvas.pack(fill='x', side='top')
         
-        # Filter row using ttk.Frame with proper column widths
+        self.filter_inner_frame = ttk.Frame(self.filter_canvas)
+        self.filter_canvas.create_window((0,0), window=self.filter_inner_frame, anchor='nw')
+
+        # Create Filter Widgets
+        for col in self.column_names:
+            width = self.col_widths.get(col,100)
+
+            # Container for each filter
+            f_container = ttk.Frame(self.filter_inner_frame, width=width, height=45)
+            f_container.pack(side='left', padx=0, pady=0)
+            f_container.pack_propagate(False)
+
+            label = tk.Label(f_container, text=f"🔍 {col}", font=("Arial", 7, "bold"), bg="#d0d0d0")
+            label.pack(fill="x")
+
+            # Get unique vals for dropdown
+            unique_vals = sorted(self.df[col].unique().tolist())
+            unique_vals = [""] + [str(v) for v in unique_vals]
+            # Combobox
+            cb = ttk.Combobox(f_container, values=unique_vals, font=("Arial", 8))
+            cb.pack(fill="x", padx=2)
+
+            # Bind both selection and typing
+            cb.bind("<<ComboboxSelected>>", lambda e: self.apply_filters())
+            cb.bind("<KeyRelease>", lambda e: self.apply_filters())
+
+            self.filter_widgets[col] = cb
+            self.filter_containers[col] = f_container
+
+        # 2. Treeview Area
+        tree_frame = ttk.Frame(main_frame)
+        tree_frame.pack(fill="both", expand=True)
+
+        self.tree = ttk.Treeview(tree_frame, columns=self.column_names, show='headings', height=25)
+
+        for col in self.column_names:
+            self.tree.heading(col, text=col, command=lambda c=col: self.sort_by_column(c))
+            self.tree.column(col, width=self.col_widths[col], anchor="w")
+
+        """ # Filter row using ttk.Frame with proper column widths
         filter_frame = ttk.Frame(main_frame)
         filter_frame.pack(fill="x", padx=0, pady=0, side="top")
 
@@ -577,7 +645,7 @@ class ResultsTableScreen:
             label = tk.Label(filt_box, text=f"🔍 {col}", font=("Arial", 8, "bold"), bg="#e0e0e0", fg="navy", height=1)
             label.pack(fill="x")
             
-            entry = ttk.Entry(filt_box, width=int(width/8))
+            entry = ttk.Entry(filt_box, width=int(width))
             entry.pack(fill="both", expand=True, padx=2, pady=2)
             entry.bind("<KeyRelease>", lambda e, c=col: self.apply_filters())
             
@@ -593,24 +661,54 @@ class ResultsTableScreen:
         for col in self.column_names:
             width = self.col_widths.get(col, 100)
             self.tree.column(col, width=width, anchor="w")
-            self.tree.heading(col, text=col, command=lambda c=col: self.sort_by_column(c))
-        
+            self.tree.heading(col, text=col, command=lambda c=col: self.sort_by_column(c)) """
+
+        # Scrollbars        
         vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
-        hsb = ttk.Scrollbar(tree_frame, orient="horizontal", command=self.tree.xview)
+        hsb = ttk.Scrollbar(main_frame, orient="horizontal", command=self.sync_hscroll)
+
         self.tree.configure(yscroll=vsb.set, xscroll=hsb.set)
         
+        # Layout
         self.tree.grid(row=0, column=0, sticky="nsew")
         vsb.grid(row=0, column=1, sticky="ns")
-        hsb.grid(row=1, column=0, sticky="ew")
+        hsb.pack(fill="x", side="bottom")
+
         tree_frame.grid_rowconfigure(0, weight=1)
         tree_frame.grid_columnconfigure(0, weight=1)
-        
+
+        # 3. Synchronize widths on resize
+        self.tree.bind("<Configure>", lambda e: self.sync_filter_widths())
+
         self.populate_table()
+    
+    def sync_hscroll(self, *args):
+        # Sync horizontal scrolling of Treeview and Filter Canvas
+        self.tree.xview(*args)
+        self.filter_canvas.xview(*args)
+
+    def sync_filter_widths(self):
+        # Forces the filter Entry/Combobox containers to match Treeview column widths
+        for col in self.column_names:
+            actual_width = self.tree.column(col, 'width')
+            self.filter_containers[col].config(width=actual_width)
+        # Update canvas scroll region
+        self.filter_inner_frame.update_idletasks()
+        self.filter_canvas.config(scrollregion=self.filter_canvas.bbox("all"))
 
     def populate_table(self):
-        # if DEBUG: print(f"[DEBUG]\nFiltered_df:\n{self.filtered_df}")
-        """Populate Treeview with data."""
-        treeview_data = pd.DataFrame()
+        # Populate Treeview with data.
+        if DEBUG: print(f"[DEBUG] populate_table.filtered_df:\n{self.filtered_df}")
+        self.tree.delete(*self.tree.get_children())
+        for _, row in self.filtered_df.iterrows():
+            values = []
+            for col in self.column_names:
+                val = row.get(col, "")
+                if isinstance(val, float):
+                    val = f"{val:.2f}"
+                values.append(str(val))
+
+        """ treeview_data = pd.DataFrame()
         # if DEBUG: print(f"[DEBUG] filtered_df columns:\n{self.filtered_df.columns}")
         # filtered_df is OK
         for idx, row in self.filtered_df.iterrows():
@@ -625,24 +723,23 @@ class ResultsTableScreen:
             values_df = values_df.T
             treeview_data = pd.concat([treeview_data, values_df])
             #print(values_df)
-            self.tree.insert("", "end", values=values)
+            self.tree.insert("", "end", values=values) """
+
+    def apply_filters(self):
+        # Apply all active filters to the dataframe
+        self.filtered_df = self.df.copy()
+        
+        for col, widget in self.filter_widgets.items():
+            search_term = widget.get().lower()
+            if search_term:
+                mask = self.filtered_df[col].astype(str).str.lower().str.contains(search_term, na=False)
+                self.filtered_df = self.filtered_df[mask]
+        
+        self.populate_table()
 
     def sort_by_column(self, col):
         """Sort table by column."""
         self.filtered_df = self.filtered_df.sort_values(by=col, ascending=True)
-        self.tree.delete(*self.tree.get_children())
-        self.populate_table()
-
-    def apply_filters(self):
-        """Apply all active filters to the dataframe."""
-        self.filtered_df = self.df.copy()
-        
-        for col, entry in self.filter_entries.items():
-            search_term = entry.get().lower()
-            if search_term:
-                self.filtered_df = self.filtered_df[self.filtered_df[col].astype(str).str.lower().str.contains(search_term, na=False)]
-        
-        self.tree.delete(*self.tree.get_children())
         self.populate_table()
 
 
@@ -731,7 +828,7 @@ class SquadVisualizer:
             ].sort_values('Current Quality', ascending=False)
 
             p1 = p1_match.iloc[0] if not p1_match.empty else None
-            # if DEBUG: print(f"[DEBUG] p1:\n{p1}")
+            if DEBUG: print(f"[DEBUG] p1:\n{p1}")
             if p1 is not None: used_uids.add(p1.name)
 
             # FIND SUB (#2): Match by Role and Decision, excluding already used UIDs

@@ -3,7 +3,7 @@ import re
 from datetime import datetime
 from utils import debug_nan
 
-DEBUG = True
+DEBUG = False
 
 
 def parse_dob_and_reference_year(dob_str):
@@ -104,7 +104,7 @@ def organize_squads(df, tactic, roles_df):
 
     # ================= DYNAMIC THRESHOLDS =================
     ASSET_VALUE_THRESHOLD = df['Value_Num'].quantile(0.75)
-    DEPTH_THRESHOLD = 1.5
+    DEPTH_THRESHOLD = 1 # with 1.5 -> 14 EB; 
     squad_value_q25 = df['Value_Num'].quantile(0.25)
 
     squad_configs = [
@@ -237,5 +237,6 @@ def organize_squads(df, tactic, roles_df):
                     df.at[idx, 'Decision'] = "Sell"
                 else:
                     df.at[idx, 'Decision'] = "Release"
-
+    if DEBUG: print(f"[DEBUG] organize_squads.df:\n{df}\n")
+    # debug_nan(df, "organize_squads")
     return df

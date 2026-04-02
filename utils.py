@@ -29,7 +29,7 @@ def parse_positions(pos_str):
         for area in areas:
             for side in sides:
                 parsed_list.append([area, side])
-                
+    
     return parsed_list
 
 def calculate_feet_score(row):
